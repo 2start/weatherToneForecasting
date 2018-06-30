@@ -7,12 +7,13 @@ import org.apache.flink.streaming.api.scala.extensions._
 import eu.streamline.hackathon.common.data.GDELTEvent
 import eu.streamline.hackathon.flink.operations.GDELTInputFormat
 import org.apache.flink.api.common.accumulators.Histogram
-import org.apache.flink.api.common.functions.FoldFunction
+import org.apache.flink.api.common.functions.{AggregateFunction, FoldFunction}
 import org.apache.flink.api.java.io.{CsvInputFormat, TupleCsvInputFormat}
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
 import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.TimeCharacteristic
+import org.apache.flink.streaming.api.functions.aggregation.AggregationFunction
 import org.apache.flink.streaming.api.functions.aggregation.AggregationFunction.AggregationType
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala._
@@ -101,17 +102,31 @@ object FlinkScalaJob {
       .where(eventWithStation => eventWithStation._2.id.trim)
       .equalTo(record => record.id.trim)
       .window(TumblingEventTimeWindows.of(Time.days(7)))
-      .apply{(es, weatherRecord) => (es._1.globalEventID, es._1.day, es._1.eventRootCode, Math.round(weatherRecord.datavalue.toDouble / 100))}
-      .map(e => (e, 1))
-      .keyBy(ev => ev._1._4)
-      .timeWindow(Time.days(1))
-      .reduceWith (
-        (e1, e2) => (e1._1, e1._2 + e2._2)
-      )
-      .map(ecount => (ecount._1._4 * 10, ecount._2, ecount._1._2))
+      .apply{(es, weatherRecord) => (es._1.globalEventID, es._1.day, es._1.eventRootCode, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
+
+      .map(ev => {
+        val c = if (ev._5 < 5) "low" else if (ev._5 < 25) "med" else "high"
+        (ev._1 , ev._2, ev._3, ev._4, c)
+      })
+      .keyBy(ev => ev._5)
+      .timeWindow(Time.days(7))
+      .aggregate(new AverageAggregate)
       .print()
 
     env.execute("Flink Scala GDELT Analyzer")
 
   }
 }
+
+class AverageAggregate extends AggregateFunction[(Integer, Date, Double, String), (Date, String, Double, Long), (Date, String, Double)] {
+  override def createAccumulator() = (new Date(), "", 0D, 0L)
+
+  override def add(value: (Integer, Date, Double, String), accumulator: (Date, String, Double, Long)) : (Date, String, Double, Long) =
+    (value._2, value._4, accumulator._3 + value._3, accumulator._4 + 1L)
+
+  override def getResult(accumulator: (Date, String, Double, Long)) = (accumulator._1, accumulator._2,  accumulator._3 / accumulator._4)
+
+  override def merge(a: (Date, String, Double, Long), b: (Date, String, Double, Long)) =
+    (a._1, a._2, a._3 + b._3, a._4 + b._4)
+}
+
