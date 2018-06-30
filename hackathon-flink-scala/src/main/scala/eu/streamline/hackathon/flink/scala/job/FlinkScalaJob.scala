@@ -21,6 +21,8 @@ object FlinkScalaJob {
 
   case class WeatherRecord(id: String, date: Date, element: String, datavalue: String)
 
+  case class TempRule(name: String, threshold: Integer)
+
   def main(args: Array[String]): Unit = {
 
     // join events to weather data on the same day
@@ -42,6 +44,7 @@ object FlinkScalaJob {
 
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
+    val tempRules = Array(TempRule("low", 5), TempRule("mid", 25), TempRule("high", Integer.MAX_VALUE))
 
     val weatherRawStream = env.readTextFile(pathToWeather).setParallelism(1).name("Weather Source")
 
@@ -99,8 +102,8 @@ object FlinkScalaJob {
       .window(TumblingEventTimeWindows.of(Time.days(joinWindowDays)))
       .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
       .map(ev => {
-        val c = if (ev._5 < 5) "low" else if (ev._5 < 25) "med" else "high"
-        (ev._1 , ev._2, ev._4, c)
+        val c = tempRules.filter(r => ev.temp < r.threshold).head.name
+        (ev.id, ev.date, ev.tone, c)
       })
       .keyBy(_._4)
       .window(avgToneWindow)
