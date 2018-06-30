@@ -13,6 +13,7 @@ import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.scala.extensions._
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
@@ -24,6 +25,11 @@ object FlinkScalaJob {
 
     // join events to weather data on the same day
     val joinWindowDays = 1
+
+    // we can use tumbling or sliding windows here
+    val avgToneWindow = TumblingEventTimeWindows.of(Time.days(3))
+      // SlidingEventTimeWindows.of(Time.days(4), Time.days(2))
+
     val parameters = ParameterTool.fromArgs(args)
     val pathToGDELT = parameters.get("path")
     val pathToWeather = parameters.get("wpath")
@@ -90,26 +96,17 @@ object FlinkScalaJob {
       .apply{(es, weatherRecord) => (es._1.globalEventID, es._1.day, es._1.eventRootCode, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
       .map(ev => {
         val c = if (ev._5 < 5) "low" else if (ev._5 < 25) "med" else "high"
-        (ev._1 , ev._2, ev._3, ev._4, c)
+        (ev._1 , ev._2, ev._4, c)
       })
-      .keyBy(ev => ev._5)
-      .timeWindow(Time.days(7))
-      .aggregate(new AverageAggregate)
+      .keyBy(ev => ev._4)
+      .window(avgToneWindow)
+      .apply { (key: String, window, events, out: Collector[(Instant, String, Double)]) =>
+        val avg = events.map(_._3.toDouble).sum / events.size
+
+        out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
+      }
       .print()
 
     env.execute("Flink Scala GDELT Analyzer")
   }
 }
-//
-//class AverageAggregate extends AggregateFunction[(Integer, Date, Double, String), (Date, String, Double, Long), (Date, String, Double)] {
-//  override def createAccumulator() = (new Date(), "", 0D, 0L)
-//
-//  override def add(value: (Integer, Date, Double, String), accumulator: (Date, String, Double, Long)) : (Date, String, Double, Long) =
-//    (value._2, value._4, accumulator._3 + value._3, accumulator._4 + 1L)
-//
-//  override def getResult(accumulator: (Date, String, Double, Long)) = (accumulator._1, accumulator._2,  accumulator._3 / accumulator._4)
-//
-//  override def merge(a: (Date, String, Double, Long), b: (Date, String, Double, Long)) =
-//    (a._1, a._2, a._3 + b._3, a._4 + b._4)
-//}
-
