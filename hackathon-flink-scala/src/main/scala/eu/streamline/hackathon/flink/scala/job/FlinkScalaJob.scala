@@ -43,7 +43,7 @@ object FlinkScalaJob {
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
 
-    val weatherRawStream = env.readTextFile(pathToWeather).setParallelism(1)
+    val weatherRawStream = env.readTextFile(pathToWeather).setParallelism(1).name("Weather Source")
 
 
     val dateFormat = new SimpleDateFormat("yyyyMMdd")
@@ -69,6 +69,7 @@ object FlinkScalaJob {
     val gdeltEventStream = env
       .readFile[GDELTEvent](new GDELTInputFormat(new Path(pathToGDELT)), pathToGDELT)
       .setParallelism(1)
+      .name("GDELT Event Source")
       .filter((event: GDELTEvent) => {
         event.actor1Code_countryCode != null &
         // we only have weather data for USA anyway
@@ -89,20 +90,22 @@ object FlinkScalaJob {
       (event, stationLocator.nearest(event))
     })
 
+    case class EventWeather(id: Integer, date: Instant, tone: Double, temp: Double)
+    // classified event base on temp rules
+    case class CEvent(id: Integer, date: Instant, tone: Double, clz: String)
+
     eventNearestStations.join(maxTempWeather)
-      .where(eventWithStation => eventWithStation._2.id)
-      .equalTo(record => record.id)
+      .where(_._2.id).equalTo(_.id)
       .window(TumblingEventTimeWindows.of(Time.days(joinWindowDays)))
-      .apply{(es, weatherRecord) => (es._1.globalEventID, es._1.day, es._1.eventRootCode, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
+      .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
       .map(ev => {
         val c = if (ev._5 < 5) "low" else if (ev._5 < 25) "med" else "high"
         (ev._1 , ev._2, ev._4, c)
       })
-      .keyBy(ev => ev._4)
+      .keyBy(_._4)
       .window(avgToneWindow)
       .apply { (key: String, window, events, out: Collector[(Instant, String, Double)]) =>
         val avg = events.map(_._3.toDouble).sum / events.size
-
         out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
       }
       .print()
@@ -110,3 +113,4 @@ object FlinkScalaJob {
     env.execute("Flink Scala GDELT Analyzer")
   }
 }
+
