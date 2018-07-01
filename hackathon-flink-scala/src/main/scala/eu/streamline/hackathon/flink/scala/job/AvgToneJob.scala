@@ -15,7 +15,10 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
-object FlinkScalaJob {
+/**
+  * Analyze average event report tone for each day depending on temperature levels
+  */
+object AvgToneJob {
 
   case class TempRule(name: String, threshold: Integer)
 

@@ -14,6 +14,9 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
+/**
+  * Analyze average number of event mentions depending on precipitation levels
+  */
 object AvgNumMentionsJob {
 
   case class TempRule(name: String, threshold: Integer)

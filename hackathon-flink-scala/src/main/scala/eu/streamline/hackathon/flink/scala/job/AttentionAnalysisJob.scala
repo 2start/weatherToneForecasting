@@ -17,6 +17,9 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
+/**
+  * GDELT daily attention index for a select number of countries.
+  */
 object AttentionAnalysisJob {
 
   def main(args: Array[String]): Unit = {
