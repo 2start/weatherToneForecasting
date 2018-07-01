@@ -1,6 +1,4 @@
-package eu.streamline.hackathon.common;
-
-import eu.streamline.hackathon.common.data.GDELTEvent;
+package eu.streamline.hackathon;
 
 import java.io.Serializable;
 import java.text.DateFormat;
