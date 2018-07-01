@@ -1,4 +1,4 @@
-package eu.streamline.hackathon.common.data;
+package eu.streamline.hackathon;
 
 import java.io.Serializable;
 import java.util.Date;

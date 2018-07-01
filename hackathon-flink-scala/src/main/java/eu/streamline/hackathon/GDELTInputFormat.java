@@ -1,11 +1,10 @@
-package eu.streamline.hackathon.flink.operations;
+package eu.streamline.hackathon;
 
-import eu.streamline.hackathon.common.GDELTParser;
-import eu.streamline.hackathon.common.data.GDELTEvent;
+import java.io.IOException;
+
 import org.apache.flink.api.common.io.DelimitedInputFormat;
 import org.apache.flink.core.fs.Path;
 
-import java.io.IOException;
 
 public class GDELTInputFormat extends DelimitedInputFormat<GDELTEvent> {
 

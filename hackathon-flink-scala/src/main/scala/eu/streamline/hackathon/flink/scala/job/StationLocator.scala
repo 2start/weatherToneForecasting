@@ -1,6 +1,6 @@
 package eu.streamline.hackathon.flink.scala.job
 
-import eu.streamline.hackathon.common.data.GDELTEvent
+import eu.streamline.hackathon.GDELTEvent
 
 import scala.io.Source
 

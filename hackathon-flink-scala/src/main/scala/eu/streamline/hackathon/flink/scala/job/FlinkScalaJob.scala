@@ -4,10 +4,11 @@ import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Date
 
-import eu.streamline.hackathon.common.data.GDELTEvent
-import eu.streamline.hackathon.flink.operations.GDELTInputFormat
+import eu.streamline.hackathon.{GDELTEvent, GDELTInputFormat}
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend
+import org.apache.flink.core.fs.FileSystem.WriteMode
 import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
@@ -43,6 +44,7 @@ object FlinkScalaJob {
       else StreamExecutionEnvironment.getExecutionEnvironment
 
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
+    env.setStateBackend(new RocksDBStateBackend("file:///tmp/flinkrocksdb", true))
 
     val tempRules = Array(TempRule("low", 5), TempRule("mid", 25), TempRule("high", Integer.MAX_VALUE))
 
@@ -104,16 +106,16 @@ object FlinkScalaJob {
       .name("Event-Weather Join")
       .map(ev => {
         val c = tempRules.filter(r => ev.temp < r.threshold).head.name
-        (ev.id, ev.date, ev.tone, c)
+        CEvent(ev.id, ev.date, ev.tone, c)
       })
-      .keyBy(_._4)
+      .keyBy(_.clz)
       .window(avgToneWindow)
       .apply { (key: String, window, events, out: Collector[(Instant, String, Double)]) =>
-        val avg = events.map(_._3.toDouble).sum / events.size
+        val avg = events.map(_.tone).sum / events.size
         out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
       }
       .name("AVG Tone")
-      .writeAsCsv("all-weather-tone.csv").setParallelism(1)
+      .writeAsCsv("all-weather-tone.csv", WriteMode.OVERWRITE).setParallelism(1)
 
     env.execute("Flink Scala GDELT Analyzer")
   }
