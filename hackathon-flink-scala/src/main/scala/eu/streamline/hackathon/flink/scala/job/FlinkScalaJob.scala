@@ -1,17 +1,14 @@
 package eu.streamline.hackathon.flink.scala.job
 
-import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Date
 
-import eu.streamline.hackathon.{GDELTEvent, GDELTInputFormat}
+import eu.streamline.hackathon.GDELTEvent
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
 import org.apache.flink.contrib.streaming.state.RocksDBStateBackend
 import org.apache.flink.core.fs.FileSystem.WriteMode
-import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.scala.extensions._
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
@@ -19,8 +16,6 @@ import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
 object FlinkScalaJob {
-
-  case class WeatherRecord(id: String, date: Date, element: String, datavalue: String)
 
   case class TempRule(name: String, threshold: Integer)
 
@@ -48,7 +43,15 @@ object FlinkScalaJob {
     val weatherStream = Streams.getWeatherStream(env, pathToWeather)
     val maxTempWeather = weatherStream.filterWith{element => element.element == "TMAX"}
 
-    val gdeltEventStream = Streams.getGDELTEvents(env, pathToGDELT)
+    val gdeltEventStream = Streams.getGDELTEvents(env, pathToGDELT).filter((event: GDELTEvent) => {
+      event.actor1Code_countryCode != null &
+        // we only have weather data for USA anyway
+        event.actor1Code_countryCode == "USA" &
+        event.eventGeo_lat != null &
+        event.eventGeo_long != null &
+        event.isRoot //&
+        //event.eventRootCode.equals("14")
+    })
 
 
     val stationLocator = new StationLocator()

@@ -2,8 +2,7 @@ package eu.streamline.hackathon.flink.scala.job
 
 import java.text.SimpleDateFormat
 
-import eu.streamline.hackathon.{GDELTEvent, GDELTInputFormat}
-import eu.streamline.hackathon.flink.scala.job.FlinkScalaJob.WeatherRecord
+import eu.streamline.hackathon.{GDELTEvent, GDELTInputFormat, WeatherRecord}
 import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
@@ -22,14 +21,7 @@ object Streams {
       .readFile[GDELTEvent](new GDELTInputFormat(new Path(pathToGDELT)), pathToGDELT)
       .setParallelism(1)
       .name("GDELT Event Source")
-      .filter((event: GDELTEvent) => {
-        event.actor1Code_countryCode != null &
-          // we only have weather data for USA anyway
-          event.actor1Code_countryCode == "USA" &
-          event.eventGeo_lat != null &
-          event.eventGeo_long != null &
-          event.isRoot //& event.eventRootCode.equals("14")
-      }).assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[GDELTEvent](Time.seconds(0)) {
+      .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[GDELTEvent](Time.seconds(0)) {
       override def extractTimestamp(element: GDELTEvent): Long = {
         element.day.getTime
       }
