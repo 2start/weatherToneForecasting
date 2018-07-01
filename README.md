@@ -1,4 +1,4 @@
-# GDELT events & weather stream analysis using Apache Flink
+# GDELT events & weather stream analysis using Apache Flink
 
 
 __Components:__
