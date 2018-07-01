@@ -8,6 +8,7 @@ import eu.streamline.hackathon.common.data.GDELTEvent
 import eu.streamline.hackathon.flink.operations.GDELTInputFormat
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
+import org.apache.flink.core.fs.FileSystem.WriteMode
 import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
@@ -16,6 +17,8 @@ import org.apache.flink.streaming.api.scala.extensions._
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
+
+import scala.util.Random
 
 object FlinkScalaJob {
 
@@ -29,7 +32,7 @@ object FlinkScalaJob {
     val joinWindowDays = 1
 
     // we can use tumbling or sliding windows here
-    val avgToneWindow = TumblingEventTimeWindows.of(Time.days(1))
+    val aggregateWindow = TumblingEventTimeWindows.of(Time.days(1))
       // SlidingEventTimeWindows.of(Time.days(4), Time.days(2))
 
     val parameters = ParameterTool.fromArgs(args)
@@ -65,15 +68,14 @@ object FlinkScalaJob {
 
     val maxTempWeather = weatherStream.filterWith{element => element.element == "TMAX"}
 
-    // TODO remove; these typeinfos seem to be not used?
-//    implicit val typeInfo = createTypeInformation[GDELTEvent]
-//    implicit val dateInfo = createTypeInformation[Date]
+
 
     val gdeltEventStream = env
       .readFile[GDELTEvent](new GDELTInputFormat(new Path(pathToGDELT)), pathToGDELT)
       .setParallelism(1)
       .name("GDELT Event Source")
       .filter((event: GDELTEvent) => {
+        Random.nextDouble() > 0.9 &
         event.actor1Code_countryCode != null &
         // we only have weather data for USA anyway
         event.actor1Code_countryCode == "USA" &
@@ -92,28 +94,28 @@ object FlinkScalaJob {
       (event, stationLocator.nearest(event))
     }).name("Station Locator")
 
-    case class EventWeather(id: Integer, date: Instant, tone: Double, temp: Double)
-    // classified event base on temp rules
-    case class CEvent(id: Integer, date: Instant, tone: Double, clz: String)
+    case class EventWeather(id: Integer, date: Instant, numMentions: Integer, temp: Double)
 
+    // classified event base on temp rules
     eventNearestStations.join(maxTempWeather)
       .where(_._2.id).equalTo(_.id)
       .window(TumblingEventTimeWindows.of(Time.days(joinWindowDays)))
       // temp is given in 10th of celsius
-      .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
+      .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.numMentions, weatherRecord.datavalue.toDouble / 10)}
       .name("Event-Weather Join")
       .map(ev => {
         val c = tempRules.filter(r => ev.temp < r.threshold).head.name
-        (ev.id, ev.date, ev.tone, c)
+        (ev.id, ev.date, ev.numMentions, c)
       })
       .keyBy(_._4)
-      .window(avgToneWindow)
+      .window(aggregateWindow)
       .apply { (key: String, window, events, out: Collector[(Instant, String, Double)]) =>
         val avg = events.map(_._3.toDouble).sum / events.size
         out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
       }
-      .name("AVG Tone")
-      .writeAsCsv("all-weather-tone.csv").setParallelism(1)
+      .name("AVG NumMentions")
+//      .print()
+      .writeAsCsv("all-weather-mentions.csv", WriteMode.OVERWRITE).setParallelism(1)
 
     env.execute("Flink Scala GDELT Analyzer")
   }
