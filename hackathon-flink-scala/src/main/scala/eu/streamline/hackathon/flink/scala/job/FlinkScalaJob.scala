@@ -29,7 +29,7 @@ object FlinkScalaJob {
     val joinWindowDays = 1
 
     // we can use tumbling or sliding windows here
-    val avgToneWindow = TumblingEventTimeWindows.of(Time.days(3))
+    val avgToneWindow = TumblingEventTimeWindows.of(Time.days(1))
       // SlidingEventTimeWindows.of(Time.days(4), Time.days(2))
 
     val parameters = ParameterTool.fromArgs(args)
@@ -79,8 +79,7 @@ object FlinkScalaJob {
         event.actor1Code_countryCode == "USA" &
         event.eventGeo_lat != null &
         event.eventGeo_long != null &
-        event.isRoot &
-        event.eventRootCode.equals("14")
+        event.isRoot //& event.eventRootCode.equals("14")
     }).assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[GDELTEvent](Time.seconds(0)) {
       override def extractTimestamp(element: GDELTEvent): Long = {
         element.day.getTime
@@ -91,7 +90,7 @@ object FlinkScalaJob {
 
     val eventNearestStations = gdeltEventStream.map(event => {
       (event, stationLocator.nearest(event))
-    })
+    }).name("Station Locator")
 
     case class EventWeather(id: Integer, date: Instant, tone: Double, temp: Double)
     // classified event base on temp rules
@@ -100,7 +99,9 @@ object FlinkScalaJob {
     eventNearestStations.join(maxTempWeather)
       .where(_._2.id).equalTo(_.id)
       .window(TumblingEventTimeWindows.of(Time.days(joinWindowDays)))
+      // temp is given in 10th of celsius
       .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
+      .name("Event-Weather Join")
       .map(ev => {
         val c = tempRules.filter(r => ev.temp < r.threshold).head.name
         (ev.id, ev.date, ev.tone, c)
@@ -111,7 +112,8 @@ object FlinkScalaJob {
         val avg = events.map(_._3.toDouble).sum / events.size
         out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
       }
-      .print()
+      .name("AVG Tone")
+      .writeAsCsv("all-weather-tone.csv").setParallelism(1)
 
     env.execute("Flink Scala GDELT Analyzer")
   }
