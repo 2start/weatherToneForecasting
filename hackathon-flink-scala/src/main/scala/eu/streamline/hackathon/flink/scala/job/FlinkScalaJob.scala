@@ -1,91 +1,85 @@
 package eu.streamline.hackathon.flink.scala.job
 
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.util.Date
 
-import org.apache.flink.streaming.api.scala.extensions._
 import eu.streamline.hackathon.common.data.GDELTEvent
 import eu.streamline.hackathon.flink.operations.GDELTInputFormat
-import org.apache.flink.api.common.accumulators.Histogram
-import org.apache.flink.api.common.functions.{AggregateFunction, FoldFunction}
-import org.apache.flink.api.java.io.{CsvInputFormat, TupleCsvInputFormat}
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
 import org.apache.flink.core.fs.Path
 import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.functions.aggregation.AggregationFunction
-import org.apache.flink.streaming.api.functions.aggregation.AggregationFunction.AggregationType
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala._
-import org.apache.flink.streaming.api.scala.function.{ProcessWindowFunction, WindowFunction}
-import org.apache.flink.streaming.api.windowing.assigners.{TumblingEventTimeWindows, TumblingTimeWindows}
+import org.apache.flink.streaming.api.scala.extensions._
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
 import org.apache.flink.streaming.api.windowing.time.Time
-import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.util.Collector
 
 object FlinkScalaJob {
 
   case class WeatherRecord(id: String, date: Date, element: String, datavalue: String)
 
+  case class TempRule(name: String, threshold: Integer)
+
   def main(args: Array[String]): Unit = {
+
+    // join events to weather data on the same day
+    val joinWindowDays = 1
+
+    // we can use tumbling or sliding windows here
+    val avgToneWindow = TumblingEventTimeWindows.of(Time.days(1))
+      // SlidingEventTimeWindows.of(Time.days(4), Time.days(2))
 
     val parameters = ParameterTool.fromArgs(args)
     val pathToGDELT = parameters.get("path")
     val pathToWeather = parameters.get("wpath")
-    val country = parameters.get("country", "USA")
+    val startWebUI = parameters.getBoolean("webui", false)
 
     val config = new Configuration()
     config.setBoolean(ConfigConstants.LOCAL_START_WEBSERVER, true)
-    val env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(config)
-    // val env = StreamExecutionEnvironment.getExecutionEnvironment
+    val env = if (startWebUI) StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(config)
+      else StreamExecutionEnvironment.getExecutionEnvironment
+
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
+    val tempRules = Array(TempRule("low", 5), TempRule("mid", 25), TempRule("high", Integer.MAX_VALUE))
 
-    val weatherRawStream = env.readTextFile(pathToWeather).setParallelism(1)
+    val weatherRawStream = env.readTextFile(pathToWeather).setParallelism(1).name("Weather Source")
 
 
     val dateFormat = new SimpleDateFormat("yyyyMMdd")
-    val weatherStream = weatherRawStream.mapWith(line => {
-      val elements = line.split(",")
-      val elementTuple = (elements(0), dateFormat.parse(elements(1)), elements(2), elements(3))
-      WeatherRecord.tupled(elementTuple)
-    })
-    .filter(weatherRecord => weatherRecord.date.after(dateFormat.parse("20170131")))
+    val weatherStream = weatherRawStream
+      .mapWith(line => {
+        val elements = line.split(",")
+        val elementTuple = (elements(0), dateFormat.parse(elements(1)), elements(2), elements(3))
+        WeatherRecord.tupled(elementTuple)
+      })
+      .filter(weatherRecord => weatherRecord.date.after(dateFormat.parse("20170131")))
+      .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[WeatherRecord](Time.seconds(0)) {
+          override def extractTimestamp(element: WeatherRecord): Long = {
+            element.date.getTime
+          }
+      })
 
-    val weatherTimestampedStream = weatherStream.assignTimestampsAndWatermarks(
-      new BoundedOutOfOrdernessTimestampExtractor[WeatherRecord](Time.seconds(0)) {
-      override def extractTimestamp(element: WeatherRecord): Long = {
-        element.date.getTime
-      }
-    })
+    val maxTempWeather = weatherStream.filterWith{element => element.element == "TMAX"}
 
-    // keyBy station, date
-    val maxTempWeather = weatherTimestampedStream.filterWith{element => element.element == "TMAX"}
+    // TODO remove; these typeinfos seem to be not used?
+//    implicit val typeInfo = createTypeInformation[GDELTEvent]
+//    implicit val dateInfo = createTypeInformation[Date]
 
-//    val ot = OutputTag[WeatherRecord]("TMAX Value")
-//    val maxTempSide = maxTempWeather.getSideOutput(ot)
-//      .timeWindowAll(Time.days(30))
-//      .apply((window: TimeWindow, values: Iterable[WeatherRecord], out: Collector[(Date, Double)])=>{
-//        val vd = values.map(_.datavalue.toDouble)
-//        val avg = vd.sum / values.size
-//
-//        out.collect((values.head.date, avg))
-//        })
-
-    implicit val typeInfo = createTypeInformation[GDELTEvent]
-    implicit val dateInfo = createTypeInformation[Date]
-
-    val gdeltStream = env
+    val gdeltEventStream = env
       .readFile[GDELTEvent](new GDELTInputFormat(new Path(pathToGDELT)), pathToGDELT)
       .setParallelism(1)
-
-    val filteredStream = gdeltStream.filter((event: GDELTEvent) => {
+      .name("GDELT Event Source")
+      .filter((event: GDELTEvent) => {
         event.actor1Code_countryCode != null &
-        event.actor1Code_countryCode == country &
+        // we only have weather data for USA anyway
+        event.actor1Code_countryCode == "USA" &
         event.eventGeo_lat != null &
         event.eventGeo_long != null &
-        event.isRoot &
-        event.eventRootCode.equals("14")
+        event.isRoot //& event.eventRootCode.equals("14")
     }).assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[GDELTEvent](Time.seconds(0)) {
       override def extractTimestamp(element: GDELTEvent): Long = {
         element.day.getTime
@@ -94,39 +88,34 @@ object FlinkScalaJob {
 
     val stationLocator = new StationLocator()
 
-    val eventNearestStations = filteredStream.map(event => {
+    val eventNearestStations = gdeltEventStream.map(event => {
       (event, stationLocator.nearest(event))
-    })
+    }).name("Station Locator")
+
+    case class EventWeather(id: Integer, date: Instant, tone: Double, temp: Double)
+    // classified event base on temp rules
+    case class CEvent(id: Integer, date: Instant, tone: Double, clz: String)
 
     eventNearestStations.join(maxTempWeather)
-      .where(eventWithStation => eventWithStation._2.id.trim)
-      .equalTo(record => record.id.trim)
-      .window(TumblingEventTimeWindows.of(Time.days(7)))
-      .apply{(es, weatherRecord) => (es._1.globalEventID, es._1.day, es._1.eventRootCode, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
-
+      .where(_._2.id).equalTo(_.id)
+      .window(TumblingEventTimeWindows.of(Time.days(joinWindowDays)))
+      // temp is given in 10th of celsius
+      .apply{(es, weatherRecord) => EventWeather(es._1.globalEventID, es._1.day.toInstant, es._1.avgTone, weatherRecord.datavalue.toDouble / 10)}
+      .name("Event-Weather Join")
       .map(ev => {
-        val c = if (ev._5 < 5) "low" else if (ev._5 < 25) "med" else "high"
-        (ev._1 , ev._2, ev._3, ev._4, c)
+        val c = tempRules.filter(r => ev.temp < r.threshold).head.name
+        (ev.id, ev.date, ev.tone, c)
       })
-      .keyBy(ev => ev._5)
-      .timeWindow(Time.days(7))
-      .aggregate(new AverageAggregate)
-      .print()
+      .keyBy(_._4)
+      .window(avgToneWindow)
+      .apply { (key: String, window, events, out: Collector[(Instant, String, Double)]) =>
+        val avg = events.map(_._3.toDouble).sum / events.size
+        out.collect((Instant.ofEpochMilli(window.getStart), key, avg))
+      }
+      .name("AVG Tone")
+      .writeAsCsv("all-weather-tone.csv").setParallelism(1)
 
     env.execute("Flink Scala GDELT Analyzer")
-
   }
-}
-
-class AverageAggregate extends AggregateFunction[(Integer, Date, Double, String), (Date, String, Double, Long), (Date, String, Double)] {
-  override def createAccumulator() = (new Date(), "", 0D, 0L)
-
-  override def add(value: (Integer, Date, Double, String), accumulator: (Date, String, Double, Long)) : (Date, String, Double, Long) =
-    (value._2, value._4, accumulator._3 + value._3, accumulator._4 + 1L)
-
-  override def getResult(accumulator: (Date, String, Double, Long)) = (accumulator._1, accumulator._2,  accumulator._3 / accumulator._4)
-
-  override def merge(a: (Date, String, Double, Long), b: (Date, String, Double, Long)) =
-    (a._1, a._2, a._3 + b._3, a._4 + b._4)
 }
 
